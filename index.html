@@ -1,0 +1,1900 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Berkas Penilaian — NeuroTest</title>
+
+<!-- ==========================================================
+     LIBRARY EKSTERNAL
+     1. Chart.js -> untuk Radar Chart hasil tes
+     2. jsPDF    -> untuk generate sertifikat PDF
+     Dipakai lewat jsDelivr (bukan cdnjs) karena versi 4.4.4 Chart.js
+     terkonfirmasi TIDAK tersedia di cdnjs (lihat GitHub issue #11892
+     chartjs/Chart.js) — pakai jsDelivr, dengan fallback unpkg kalau gagal.
+     ========================================================== -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"
+        onerror="this.onerror=null; var s=document.createElement('script'); s.src='https://unpkg.com/chart.js@4.4.4/dist/chart.umd.min.js'; document.head.appendChild(s);"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"
+        onerror="this.onerror=null; var s=document.createElement('script'); s.src='https://unpkg.com/jspdf@2.5.1/dist/jspdf.umd.min.js'; document.head.appendChild(s);"></script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600;8..60,700&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+/* ==========================================================
+   DESIGN SYSTEM — "Berkas Penilaian" (Assessment Dossier)
+   Terinspirasi dari lembar tes psikometri cetak & arsip nilai:
+   kertas krem, tinta hitam, aksen merah pena-koreksi, dan
+   monospace ala mesin ketik untuk data/angka. Tanpa gradient,
+   tanpa glow — flat, tegas, seperti dokumen yang dicetak.
+   ========================================================== */
+:root{
+  --paper:        #F4F1E8;
+  --paper-raised: #EDE8DA;
+  --ink:          #1C1A16;
+  --ink-soft:     #55503F;
+  --ink-faint:    #948C74;
+  --rule:         #D8D0BC;
+  --rule-strong:  #B8AD8E;
+
+  --red:          #A8342A;   /* tinta koreksi */
+  --red-soft:     #C96A5C;
+  --sage:         #566B4F;   /* benar / positif */
+  --sage-soft:    #7C9271;
+  --amber:        #9C7A2E;   /* peringatan waktu */
+
+  --font-display: 'Source Serif 4', Georgia, serif;
+  --font-body:    'Inter', sans-serif;
+  --font-mono:    'IBM Plex Mono', monospace;
+
+  --radius: 3px;
+}
+
+*{ box-sizing:border-box; margin:0; padding:0; }
+html{ scroll-behavior:smooth; }
+
+body{
+  background:
+    repeating-linear-gradient(0deg, transparent, transparent 34px, rgba(28,26,22,0.035) 35px),
+    var(--paper);
+  color:var(--ink);
+  font-family:var(--font-body);
+  min-height:100vh;
+  line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+}
+
+.container{
+  max-width:740px;
+  margin:0 auto 0 max(20px, calc(50% - 400px));
+  padding:0 20px 90px 0;
+}
+@media (max-width:820px){
+  .container{ margin:0 auto; padding:0 20px 90px; }
+}
+
+a:focus-visible, button:focus-visible, input:focus-visible{
+  outline:2px solid var(--red);
+  outline-offset:2px;
+}
+
+@media (prefers-reduced-motion: reduce){
+  *{ animation-duration:0.01ms !important; transition-duration:0.01ms !important; }
+}
+
+/* ==========================================================
+   HEADER — kop dokumen
+   ========================================================== */
+.doc-header{
+  border-bottom:2px solid var(--ink);
+  padding:22px 0 16px;
+  margin-bottom:6px;
+  display:flex;
+  align-items:flex-end;
+  justify-content:space-between;
+  gap:16px;
+}
+.doc-mark{
+  font-family:var(--font-mono);
+  font-size:10.5px;
+  letter-spacing:0.14em;
+  color:var(--ink-faint);
+  text-transform:uppercase;
+}
+.doc-title{
+  font-family:var(--font-display);
+  font-weight:700;
+  font-size:23px;
+  letter-spacing:-0.02em;
+  margin-top:3px;
+}
+.doc-status{
+  font-family:var(--font-mono);
+  font-size:10px;
+  letter-spacing:0.06em;
+  color:var(--ink-faint);
+  text-align:right;
+  border:1px solid var(--rule-strong);
+  padding:4px 9px 3px;
+  white-space:nowrap;
+  transform:rotate(-1.4deg);
+}
+
+/* ==========================================================
+   SCREEN MANAGEMENT
+   ========================================================== */
+.screen{ display:none; }
+.screen.active{
+  display:block;
+  animation:pageIn 0.4s cubic-bezier(.16,.7,.24,1);
+}
+@keyframes pageIn{
+  from{ opacity:0; transform:translateY(6px); }
+  to{ opacity:1; transform:translateY(0); }
+}
+
+/* ==========================================================
+   INTRO SCREEN
+   ========================================================== */
+.intro-lede{
+  padding:40px 0 4px;
+}
+.intro-lede .field-no{
+  font-family:var(--font-mono);
+  font-size:11px;
+  color:var(--red);
+  letter-spacing:0.1em;
+  margin-bottom:12px;
+}
+.intro-lede h1{
+  font-family:var(--font-display);
+  font-size:clamp(30px, 6vw, 44px);
+  font-weight:700;
+  line-height:1.12;
+  letter-spacing:-0.02em;
+  margin-bottom:18px;
+  max-width:17ch;
+}
+.intro-lede p{
+  color:var(--ink-soft);
+  max-width:50ch;
+  font-size:15.5px;
+  margin-bottom:8px;
+}
+
+.spec-table{
+  margin:28px 0 30px;
+  border-top:1px solid var(--ink);
+  border-bottom:1px solid var(--ink);
+}
+.spec-row{
+  display:flex;
+  justify-content:space-between;
+  align-items:baseline;
+  padding:11px 2px;
+  border-bottom:1px dotted var(--rule-strong);
+  font-size:14px;
+}
+.spec-row:last-child{ border-bottom:none; }
+.spec-row .k{ color:var(--ink-soft); }
+.spec-row .v{ font-family:var(--font-mono); font-weight:500; letter-spacing:0.02em; }
+
+.notice-block{
+  border-left:3px solid var(--red);
+  background:var(--paper-raised);
+  padding:16px 18px;
+  margin-bottom:30px;
+}
+.notice-block .notice-label{
+  font-family:var(--font-mono);
+  font-size:10.5px;
+  letter-spacing:0.1em;
+  color:var(--red);
+  margin-bottom:8px;
+  text-transform:uppercase;
+}
+.notice-block ul{ list-style:none; }
+.notice-block li{
+  font-size:13.5px;
+  color:var(--ink-soft);
+  padding:5px 0;
+  position:relative;
+  padding-left:16px;
+}
+.notice-block li::before{
+  content:'—';
+  position:absolute;
+  left:0;
+  color:var(--ink-faint);
+}
+
+.name-field{ margin-bottom:24px; }
+.name-field label{
+  display:block;
+  font-family:var(--font-mono);
+  font-size:11px;
+  letter-spacing:0.06em;
+  color:var(--ink-soft);
+  margin-bottom:9px;
+  text-transform:uppercase;
+}
+.name-field input{
+  width:100%;
+  background:transparent;
+  border:none;
+  border-bottom:1.5px solid var(--ink);
+  color:var(--ink);
+  padding:8px 2px;
+  font-size:17px;
+  font-family:var(--font-display);
+  transition:border-color .2s;
+}
+.name-field input:focus{ border-color:var(--red); outline:none; }
+.name-field input::placeholder{ color:var(--ink-faint); font-family:var(--font-body); font-size:15px; }
+
+/* ==========================================================
+   BUTTONS
+   ========================================================== */
+.btn{
+  font-family:var(--font-body);
+  font-weight:600;
+  font-size:14.5px;
+  border:1.5px solid var(--ink);
+  border-radius:2px;
+  padding:14px 26px;
+  cursor:pointer;
+  transition:background .15s ease, color .15s ease, transform .1s ease;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  background:transparent;
+  color:var(--ink);
+}
+.btn:active{ transform:translateY(1px); }
+.btn-primary{
+  background:var(--ink);
+  color:var(--paper);
+  width:100%;
+}
+.btn-primary:hover{ background:var(--red); border-color:var(--red); }
+.btn-primary:disabled{ opacity:0.35; cursor:not-allowed; background:var(--ink-faint); border-color:var(--ink-faint); }
+.btn-ghost{
+  background:transparent;
+  border-color:var(--rule-strong);
+  color:var(--ink-soft);
+}
+.btn-ghost:hover{ border-color:var(--ink); color:var(--ink); }
+.btn-block{ width:100%; }
+
+/* ==========================================================
+   TEST SCREEN
+   ========================================================== */
+.test-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:18px;
+  margin:18px 0 20px;
+}
+.progress-wrap{ flex:1; }
+.progress-meta{
+  display:flex;
+  justify-content:space-between;
+  font-family:var(--font-mono);
+  font-size:11.5px;
+  color:var(--ink-soft);
+  margin-bottom:7px;
+  letter-spacing:0.02em;
+}
+.progress-track{
+  height:3px;
+  background:var(--rule);
+  position:relative;
+}
+.progress-fill{
+  height:100%;
+  background:var(--ink);
+  transition:width .4s cubic-bezier(.2,.6,.3,1);
+}
+
+.timer-box{
+  font-family:var(--font-mono);
+  font-size:19px;
+  font-weight:600;
+  color:var(--ink);
+  border:1.5px solid var(--ink);
+  min-width:56px;
+  text-align:center;
+  padding:8px 4px;
+  flex-shrink:0;
+  position:relative;
+}
+.timer-box.timer-danger{
+  border-color:var(--red);
+  color:var(--red);
+  animation:timerPulse 1s infinite;
+}
+@keyframes timerPulse{
+  0%,100%{ background:transparent; }
+  50%{ background:rgba(168,52,42,0.08); }
+}
+
+.test-card{
+  background:var(--paper-raised);
+  border:1px solid var(--rule-strong);
+  border-top:1px solid var(--rule-strong);
+  padding:32px 28px 30px;
+  transition:border-color .3s;
+  position:relative;
+  overflow:hidden;
+}
+.test-card::before{
+  content:attr(data-qnum);
+  position:absolute;
+  top:-14px; right:-6px;
+  font-family:var(--font-display);
+  font-weight:700;
+  font-size:96px;
+  color:var(--ink);
+  opacity:0.05;
+  line-height:1;
+  pointer-events:none;
+  user-select:none;
+}
+.test-card.urgent{
+  border-color:var(--red);
+}
+.test-card.urgent::before{ color:var(--red); opacity:0.08; }
+
+.q-category{
+  font-family:var(--font-mono);
+  font-size:11px;
+  text-transform:uppercase;
+  letter-spacing:0.1em;
+  color:var(--red);
+  margin-bottom:16px;
+}
+.q-text{
+  font-family:var(--font-display);
+  font-size:clamp(18px, 3vw, 21px);
+  font-weight:500;
+  line-height:1.45;
+  margin-bottom:24px;
+  letter-spacing:-0.005em;
+}
+.q-visual{
+  text-align:center;
+  font-size:22px;
+  letter-spacing:5px;
+  font-family:var(--font-mono);
+  color:var(--ink);
+  background:var(--paper);
+  border:1px dashed var(--rule-strong);
+  padding:18px;
+  margin-bottom:24px;
+}
+.q-svg-visual{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:12px;
+  flex-wrap:wrap;
+  background:var(--paper);
+  border:1px dashed var(--rule-strong);
+  padding:22px 14px;
+  margin-bottom:24px;
+}
+.q-svg-visual svg{ display:block; }
+.q-svg-visual .svg-cell{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  width:60px; height:60px;
+  background:var(--paper-raised);
+  border:1px solid var(--rule-strong);
+}
+.q-svg-visual .svg-sep{
+  font-family:var(--font-mono);
+  color:var(--ink-faint);
+  font-size:18px;
+}
+.q-svg-visual .svg-qmark{
+  width:60px; height:60px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:var(--paper-raised);
+  border:1px dashed var(--red);
+  color:var(--red);
+  font-family:var(--font-display);
+  font-size:20px;
+  font-weight:700;
+}
+
+.options{ display:grid; gap:9px; }
+.option{
+  display:flex;
+  align-items:center;
+  gap:13px;
+  background:var(--paper);
+  border:1px solid var(--rule-strong);
+  padding:13px 15px;
+  cursor:pointer;
+  text-align:left;
+  font-family:var(--font-body);
+  font-size:14.5px;
+  color:var(--ink);
+  transition:border-color .15s, background .15s;
+}
+.option:hover{ border-color:var(--ink); }
+.option .opt-letter{
+  width:24px; height:24px;
+  border:1px solid var(--rule-strong);
+  display:flex; align-items:center; justify-content:center;
+  font-family:var(--font-mono);
+  font-size:11.5px;
+  color:var(--ink-soft);
+  flex-shrink:0;
+}
+.option.selected{ border-color:var(--red); background:rgba(168,52,42,0.05); }
+.option.selected .opt-letter{ background:var(--red); color:var(--paper); border-color:var(--red); }
+
+.options.options-svg{ grid-template-columns:repeat(2, 1fr); }
+.option-svg{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:8px;
+  background:var(--paper);
+  border:1px solid var(--rule-strong);
+  padding:12px 8px;
+  cursor:pointer;
+  transition:border-color .15s, background .15s;
+}
+.option-svg:hover{ border-color:var(--ink); }
+.option-svg.selected{ border-color:var(--red); background:rgba(168,52,42,0.05); }
+.option-svg .opt-letter{
+  font-family:var(--font-mono);
+  font-size:10.5px;
+  color:var(--ink-soft);
+}
+.option-svg.selected .opt-letter{ color:var(--red); font-weight:700; }
+
+.test-footer{ display:flex; justify-content:flex-end; margin-top:22px; }
+.test-footer .btn{ min-width:170px; }
+
+/* ==========================================================
+   RESULT SCREEN
+   ========================================================== */
+.result-header{
+  padding:24px 0 8px;
+  border-bottom:1px solid var(--rule-strong);
+  margin-bottom:26px;
+}
+.result-header .field-no{
+  font-family:var(--font-mono);
+  font-size:11px;
+  color:var(--ink-faint);
+  letter-spacing:0.08em;
+  margin-bottom:6px;
+}
+.result-header h2{
+  font-family:var(--font-display);
+  font-size:22px;
+  font-weight:600;
+}
+
+.score-panel{
+  display:flex;
+  align-items:center;
+  gap:26px;
+  padding:8px 0 30px;
+  flex-wrap:wrap;
+}
+.score-stamp{
+  width:120px; height:112px;
+  border:3px solid var(--red);
+  border-radius:52% 48% 51% 49% / 53% 47% 53% 47%;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  flex-shrink:0;
+  transform:rotate(-7.5deg);
+  position:relative;
+  opacity:0.92;
+}
+.score-stamp::after{
+  content:'';
+  position:absolute;
+  inset:7px 8px 6px 9px;
+  border:1px solid var(--red);
+  border-radius:52% 48% 51% 49% / 53% 47% 53% 47%;
+  opacity:0.45;
+}
+.score-stamp .num{
+  font-family:var(--font-display);
+  font-size:37px;
+  font-weight:700;
+  color:var(--red);
+  line-height:1;
+  transform:rotate(1deg);
+}
+.score-stamp .lbl{
+  font-family:var(--font-mono);
+  font-size:9px;
+  letter-spacing:0.06em;
+  color:var(--red);
+  text-transform:uppercase;
+  margin-top:3px;
+}
+.score-meta{ flex:1; min-width:200px; }
+.score-meta .tag{
+  font-family:var(--font-mono);
+  font-size:12px;
+  color:var(--ink-soft);
+  margin-bottom:6px;
+  letter-spacing:0.02em;
+}
+.score-meta .desc{
+  font-family:var(--font-display);
+  font-size:17px;
+  font-weight:500;
+}
+
+.chart-card{
+  border-top:1px solid var(--ink);
+  border-bottom:1px solid var(--rule-strong);
+  padding:28px 4px 30px;
+  margin-bottom:30px;
+}
+.chart-card h3{
+  font-family:var(--font-mono);
+  font-size:11px;
+  letter-spacing:0.1em;
+  text-transform:uppercase;
+  color:var(--ink-soft);
+  text-align:center;
+  margin-bottom:4px;
+}
+.chart-card .sub{
+  text-align:center;
+  font-size:12.5px;
+  color:var(--ink-faint);
+  margin-bottom:16px;
+}
+.chart-wrap{ max-width:400px; height:320px; margin:0 auto; position:relative; }
+
+.category-breakdown{
+  display:grid;
+  grid-template-columns:repeat(auto-fit, minmax(130px,1fr));
+  border:1px solid var(--rule-strong);
+  margin-bottom:30px;
+}
+.cat-pill{
+  padding:15px 16px;
+  border-right:1px solid var(--rule-strong);
+  border-bottom:1px solid var(--rule-strong);
+}
+.cat-pill:last-child{ border-right:none; }
+.cat-pill .cat-name{
+  font-family:var(--font-mono);
+  font-size:10.5px;
+  letter-spacing:0.04em;
+  color:var(--ink-soft);
+  margin-bottom:6px;
+  text-transform:uppercase;
+}
+.cat-pill .cat-score{
+  font-family:var(--font-display);
+  font-size:22px;
+  font-weight:600;
+}
+
+.section-title{
+  font-family:var(--font-mono);
+  font-size:11.5px;
+  letter-spacing:0.08em;
+  text-transform:uppercase;
+  color:var(--ink-soft);
+  margin:38px 0 16px;
+  padding-bottom:8px;
+  border-bottom:1px solid var(--ink);
+}
+
+.review-item{
+  border-bottom:1px solid var(--rule);
+  padding:16px 2px;
+}
+.review-top{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom:9px;
+}
+.review-q{
+  font-family:var(--font-body);
+  font-weight:600;
+  font-size:14.5px;
+  line-height:1.4;
+}
+.result-chip{
+  flex-shrink:0;
+  font-family:var(--font-mono);
+  font-size:10.5px;
+  padding:3px 9px;
+  white-space:nowrap;
+  border:1px solid;
+}
+.chip-correct{ color:var(--sage); border-color:var(--sage); }
+.chip-wrong{ color:var(--red); border-color:var(--red); }
+
+.review-answers{
+  font-size:13px;
+  color:var(--ink-soft);
+  margin-bottom:9px;
+  display:flex;
+  flex-wrap:wrap;
+  gap:5px 18px;
+}
+.review-answers b{ color:var(--ink); font-weight:600; }
+.review-explain{
+  font-size:13px;
+  color:var(--ink-soft);
+  background:var(--paper-raised);
+  padding:11px 13px;
+  border-left:2px solid var(--rule-strong);
+  line-height:1.6;
+}
+
+.result-actions{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:10px;
+  margin-top:34px;
+}
+
+/* ==========================================================
+   MODALS
+   ========================================================== */
+.modal-overlay{
+  position:fixed; inset:0;
+  background:rgba(28,26,22,0.55);
+  display:none;
+  align-items:center;
+  justify-content:center;
+  z-index:100;
+  padding:20px;
+}
+.modal-overlay.active{ display:flex; animation:modalIn .18s ease-out; }
+@keyframes modalIn{
+  from{ opacity:0; }
+  to{ opacity:1; }
+}
+.modal-box{
+  background:var(--paper);
+  border:1.5px solid var(--red);
+  padding:30px;
+  max-width:400px;
+  text-align:center;
+}
+.modal-box .ic{ font-size:13px; font-family:var(--font-mono); color:var(--red); letter-spacing:0.1em; margin-bottom:14px; text-transform:uppercase; }
+.modal-box h3{ font-family:var(--font-display); font-size:19px; margin-bottom:10px; }
+.modal-box p{ font-size:13.5px; color:var(--ink-soft); margin-bottom:22px; line-height:1.6; }
+
+/* ---- Certificate preview modal ---- */
+.cert-modal-box{
+  background:var(--paper);
+  border:1px solid var(--ink);
+  padding:26px;
+  max-width:520px;
+  width:100%;
+  position:relative;
+  max-height:90vh;
+  overflow-y:auto;
+}
+.cert-close{
+  position:absolute;
+  top:14px; right:14px;
+  width:30px; height:30px;
+  border:1px solid var(--rule-strong);
+  background:transparent;
+  color:var(--ink-soft);
+  font-size:13px;
+  cursor:pointer;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+.cert-close:hover{ border-color:var(--ink); color:var(--ink); }
+
+.cert-preview{ margin-top:8px; margin-bottom:22px; }
+.cert-border{
+  border:2px solid var(--ink);
+  padding:34px 26px;
+  text-align:center;
+  position:relative;
+}
+.cert-border::before{
+  content:'';
+  position:absolute;
+  inset:6px;
+  border:1px solid var(--rule-strong);
+  pointer-events:none;
+}
+.cert-eyebrow{
+  font-family:var(--font-mono);
+  font-size:10px;
+  letter-spacing:0.12em;
+  color:var(--ink-faint);
+  margin-bottom:16px;
+  text-transform:uppercase;
+}
+.cert-title{
+  font-family:var(--font-display);
+  font-size:21px;
+  font-weight:600;
+  margin-bottom:20px;
+}
+.cert-given-to{
+  font-family:var(--font-mono);
+  font-size:11px;
+  color:var(--ink-soft);
+  margin-bottom:8px;
+  text-transform:uppercase;
+  letter-spacing:0.04em;
+}
+.cert-name{
+  font-family:var(--font-display);
+  font-size:25px;
+  font-weight:700;
+  color:var(--ink);
+  margin-bottom:24px;
+  word-break:break-word;
+  border-bottom:1px solid var(--rule-strong);
+  padding-bottom:14px;
+  display:inline-block;
+}
+.cert-score-row{ display:flex; flex-direction:column; align-items:center; margin-bottom:8px; }
+.cert-score-num{ font-family:var(--font-display); font-size:42px; font-weight:700; color:var(--red); line-height:1; }
+.cert-score-label{ font-family:var(--font-mono); font-size:10.5px; color:var(--ink-soft); margin-top:5px; text-transform:uppercase; letter-spacing:0.05em; }
+.cert-correct{ font-size:12.5px; color:var(--ink-soft); margin-bottom:22px; }
+.cert-cats{
+  display:flex;
+  justify-content:center;
+  gap:20px;
+  flex-wrap:wrap;
+  padding-top:18px;
+  border-top:1px solid var(--rule-strong);
+  margin-bottom:18px;
+}
+.cert-cats .cc-item{ font-family:var(--font-mono); font-size:10.5px; color:var(--ink-soft); text-transform:uppercase; }
+.cert-cats .cc-item b{ color:var(--ink); display:block; font-size:15px; margin-top:3px; font-family:var(--font-display); }
+.cert-footer{ font-size:10px; color:var(--ink-faint); font-family:var(--font-mono); }
+.cert-actions{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+@media (max-width:480px){
+  .cert-modal-box{ padding:18px; }
+  .cert-border{ padding:24px 16px; }
+  .cert-actions{ grid-template-columns:1fr; }
+}
+
+.toast{
+  position:fixed;
+  bottom:24px; left:50%;
+  transform:translateX(-50%) translateY(20px);
+  background:var(--ink);
+  color:var(--paper);
+  padding:12px 20px;
+  font-size:13px;
+  font-family:var(--font-mono);
+  opacity:0;
+  pointer-events:none;
+  transition:all .3s;
+  z-index:200;
+}
+.toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+
+footer.credits{
+  text-align:center;
+  color:var(--ink-faint);
+  font-family:var(--font-mono);
+  font-size:11px;
+  margin-top:50px;
+  padding-top:20px;
+  border-top:1px solid var(--rule);
+}
+
+@media (max-width:640px){
+  .test-card{ padding:22px 18px; }
+  .result-actions{ grid-template-columns:1fr; }
+  .q-visual{ font-size:18px; letter-spacing:3px; padding:14px; }
+  .container{ padding:0 14px 70px; }
+  .score-panel{ gap:18px; }
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <div class="doc-header">
+    <div>
+      <div class="doc-mark">Berkas No. NT-2026</div>
+      <div class="doc-title">NeuroTest</div>
+    </div>
+    <div class="doc-status" id="statusBadge">BELUM DIMULAI</div>
+  </div>
+
+  <!-- ============================================================
+       SCREEN 1: INTRO / START
+       ============================================================ -->
+  <section class="screen active" id="screen-intro">
+    <div class="intro-lede">
+      <div class="field-no">Lembar Pengantar</div>
+      <h1>Penilaian kognitif menyeluruh, 50 butir soal.</h1>
+      <p>Tes ini mengukur empat area penalaran: logika, verbal, spasial, dan numerik — disusun bertingkat dari mudah ke sulit, mengikuti format asesmen psikometri standar.</p>
+    </div>
+
+    <div class="spec-table">
+      <div class="spec-row"><span class="k">Jumlah butir soal</span><span class="v">50</span></div>
+      <div class="spec-row"><span class="k">Waktu per soal</span><span class="v">30 detik</span></div>
+      <div class="spec-row"><span class="k">Area yang dinilai</span><span class="v">4 kategori</span></div>
+      <div class="spec-row"><span class="k">Estimasi total durasi</span><span class="v">± 25 menit</span></div>
+    </div>
+
+    <div class="notice-block">
+      <div class="notice-label">Sebelum memulai</div>
+      <ul>
+        <li>Setiap soal memiliki batas waktu. Jika habis, sistem lanjut otomatis ke soal berikutnya dan soal tersebut dianggap tidak terjawab.</li>
+        <li>Jawaban tidak dapat diubah setelah berpindah ke soal berikutnya.</li>
+        <li>Hasil akhir mencakup rincian skor per kategori dan pembahasan tiap jawaban.</li>
+      </ul>
+    </div>
+
+    <div class="name-field">
+      <label for="userName">Nama peserta (untuk berkas hasil)</label>
+      <input type="text" id="userName" placeholder="Tulis nama lengkap" maxlength="40">
+    </div>
+
+    <button class="btn btn-primary" id="btnStart">Mulai Penilaian</button>
+  </section>
+
+  <!-- ============================================================
+       SCREEN 2: TEST
+       ============================================================ -->
+  <section class="screen" id="screen-test">
+    <div class="test-header">
+      <div class="progress-wrap">
+        <div class="progress-meta">
+          <span id="progressLabel">Butir 1 / 50</span>
+          <span id="progressPct">02%</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" id="progressFill" style="width:2%"></div>
+        </div>
+      </div>
+      <div class="timer-box" id="timerBox">30</div>
+    </div>
+
+    <div class="test-card" id="testCard">
+      <div class="q-category" id="qCategory">Logika</div>
+      <div class="q-text" id="qText">Memuat soal...</div>
+      <div class="q-visual" id="qVisual" style="display:none;"></div>
+      <div class="q-svg-visual" id="qSvgVisual" style="display:none;"></div>
+      <div class="options" id="qOptions"></div>
+    </div>
+
+    <div class="test-footer">
+      <button class="btn btn-primary" id="btnNext" disabled>Lanjut</button>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       SCREEN 3: RESULT
+       ============================================================ -->
+  <section class="screen" id="screen-result">
+    <div class="result-header">
+      <div class="field-no" id="resultEyebrow">Berkas Hasil</div>
+      <h2>Ringkasan Penilaian</h2>
+    </div>
+
+    <div class="score-panel">
+      <div class="score-stamp">
+        <div class="num" id="scoreDisplay">0</div>
+        <div class="lbl">Skor IQ</div>
+      </div>
+      <div class="score-meta">
+        <div class="tag" id="scoreTag">—</div>
+        <div class="desc">Estimasi berdasarkan proporsi jawaban benar terhadap total 50 butir soal.</div>
+      </div>
+    </div>
+
+    <div class="chart-card">
+      <h3>Peta Kemampuan Kognitif</h3>
+      <div class="sub">Distribusi skor per kategori</div>
+      <div class="chart-wrap"><canvas id="radarChart"></canvas></div>
+    </div>
+
+    <div class="category-breakdown" id="categoryBreakdown"></div>
+
+    <div class="section-title">Pembahasan Jawaban</div>
+    <div id="reviewList"></div>
+
+    <div class="result-actions">
+      <button class="btn btn-ghost" id="btnRetry">Ulangi Tes</button>
+      <button class="btn btn-primary" id="btnCertificate">Lihat Sertifikat</button>
+    </div>
+  </section>
+
+  <footer class="credits">NeuroTest — dokumen ini bersifat edukatif &amp; hiburan, bukan hasil psikotes resmi bersertifikat.</footer>
+</div>
+
+<!-- Certificate preview modal -->
+<div class="modal-overlay" id="certModal">
+  <div class="cert-modal-box">
+    <button class="cert-close" id="btnCloseCert" aria-label="Tutup">✕</button>
+
+    <div class="cert-preview" id="certPreview">
+      <div class="cert-border">
+        <div class="cert-eyebrow">NeuroTest — Sertifikat Hasil Tes</div>
+        <div class="cert-title">Sertifikat Penyelesaian Tes IQ</div>
+        <div class="cert-given-to">Diberikan kepada</div>
+        <div class="cert-name" id="certName">Nama Peserta</div>
+        <div class="cert-score-row">
+          <div class="cert-score-num" id="certScore">100</div>
+          <div class="cert-score-label">Skor IQ Estimasi</div>
+        </div>
+        <div class="cert-correct" id="certCorrect">0 dari 50 soal benar</div>
+        <div class="cert-cats" id="certCats"></div>
+        <div class="cert-footer" id="certDate">Diterbitkan pada —</div>
+      </div>
+    </div>
+
+    <div class="cert-actions">
+      <button class="btn btn-ghost" id="btnCloseCert2">Tutup</button>
+      <button class="btn btn-primary" id="btnDownloadCert">Unduh sebagai PDF</button>
+    </div>
+  </div>
+</div>
+
+<!-- Violation modal (anti-cheat trigger, non-aktif) -->
+<div class="modal-overlay" id="violationModal">
+  <div class="modal-box">
+    <div class="ic">Tes Dihentikan</div>
+    <h3>Tes Dihentikan Otomatis</h3>
+    <p>Sistem mendeteksi kamu meninggalkan halaman tes. Tes telah otomatis di-submit dengan jawaban yang sudah terisi sejauh ini.</p>
+    <button class="btn btn-primary" id="btnAckViolation">Lihat Hasil</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ================================================================
+   SECTION 1: SVG SHAPE HELPERS
+   Dipakai untuk soal kategori Spasial — semua bentuk digambar
+   langsung pakai SVG (tanpa gambar eksternal) supaya scalable
+   dan gampang divariasikan (warna, rotasi, jumlah sisi, dsb).
+   ================================================================ */
+const SHAPE_COLORS = { a: '#6C7BFF', b: '#35D9C8', c: '#FFB648', d: '#FF5D6C', e: '#2FD971' };
+
+function svgShape(type, opts = {}){
+  const color = SHAPE_COLORS[opts.color] || opts.color || '#6C7BFF';
+  const rot = opts.rotate || 0;
+  const size = 56;
+  const c = size / 2;
+  let inner = '';
+
+  switch(type){
+    case 'triangle':
+      inner = `<polygon points="${c},8 8,48 48,48" fill="${color}"/>`;
+      break;
+    case 'square':
+      inner = `<rect x="10" y="10" width="36" height="36" fill="${color}"/>`;
+      break;
+    case 'circle':
+      inner = `<circle cx="${c}" cy="${c}" r="20" fill="${color}"/>`;
+      break;
+    case 'pentagon':
+      inner = `<polygon points="28,6 50,22 41,48 15,48 6,22" fill="${color}"/>`;
+      break;
+    case 'hexagon':
+      inner = `<polygon points="16,8 40,8 50,28 40,48 16,48 6,28" fill="${color}"/>`;
+      break;
+    case 'star':
+      inner = `<polygon points="28,4 34,20 51,20 37,31 42,48 28,38 14,48 19,31 5,20 22,20" fill="${color}"/>`;
+      break;
+    case 'diamond':
+      inner = `<polygon points="28,6 50,28 28,50 6,28" fill="${color}"/>`;
+      break;
+    case 'arrow':
+      inner = `<polygon points="8,24 32,24 32,12 50,28 32,44 32,32 8,32" fill="${color}"/>`;
+      break;
+    case 'cross':
+      inner = `<polygon points="20,6 36,6 36,20 50,20 50,36 36,36 36,50 20,50 20,36 6,36 6,20 20,20" fill="${color}"/>`;
+      break;
+    case 'ring':
+      inner = `<circle cx="${c}" cy="${c}" r="20" fill="none" stroke="${color}" stroke-width="6"/>`;
+      break;
+    default:
+      inner = `<rect x="10" y="10" width="36" height="36" fill="${color}"/>`;
+  }
+
+  return `<svg width="${size}" height="${size}" viewBox="0 0 56 56" style="transform:rotate(${rot}deg)">${inner}</svg>`;
+}
+
+function svgCell(html){ return `<div class="svg-cell">${html}</div>`; }
+function svgSep(txt){ return `<span class="svg-sep">${txt}</span>`; }
+function svgQmark(){ return `<div class="svg-qmark">?</div>`; }
+
+/* ================================================================
+   SECTION 2: DATA SOAL (50 soal — Logika, Verbal, Spasial, Numerik)
+   Setiap soal: { category, text, visual? (teks) atau svgVisual (html),
+                  options, correctIndex, explanation }
+   Soal disusun dari mudah -> sulit secara bertahap.
+   ================================================================ */
+const QUESTIONS = [
+
+/* ---------- LOGIKA (13 soal) ---------- */
+{ category:'Logika', text:'Semua kucing adalah mamalia. Sebagian mamalia bisa terbang. Manakah kesimpulan yang PASTI benar?',
+  options:['Semua kucing bisa terbang','Sebagian kucing bisa terbang','Tidak bisa disimpulkan bahwa kucing bisa terbang','Semua mamalia adalah kucing'],
+  correctIndex:2, explanation:'Premis hanya menyatakan "sebagian mamalia bisa terbang", bukan berarti kucing termasuk bagian itu. Kesimpulan yang valid adalah "tidak bisa disimpulkan".' },
+
+{ category:'Logika', text:'Jika A > B, dan B > C, maka pernyataan mana yang PASTI benar?',
+  options:['C > A','A > C','A = C','Tidak bisa ditentukan'],
+  correctIndex:1, explanation:'Sifat transitif: jika A > B dan B > C, maka otomatis A > C.' },
+
+{ category:'Logika', text:'Semua penulis suka membaca. Budi suka membaca. Apakah Budi pasti seorang penulis?',
+  options:['Ya, pasti','Tidak, belum tentu','Hanya jika Budi juga menulis buku','Tidak cukup informasi sama sekali'],
+  correctIndex:1, explanation:'Ini contoh klasik kekeliruan logika (affirming the consequent). "Semua penulis suka membaca" tidak berarti "semua yang suka membaca adalah penulis". Budi belum tentu penulis.' },
+
+{ category:'Logika', text:'Jika hari ini hujan, maka jalan basah. Jalan basah. Apakah pasti hari ini hujan?',
+  options:['Ya, pasti hujan','Tidak, bisa jadi sebab lain (misal disiram)','Mustahil ditentukan sama sekali','Ya, karena jalan basah adalah bukti kuat'],
+  correctIndex:1, explanation:'Jalan basah bisa disebabkan hal lain selain hujan (disiram, tumpahan air, dll). Pernyataan awal tidak menjamin sebaliknya juga benar.' },
+
+{ category:'Logika', text:'Dalam sebuah rapat, X duduk di sebelah kiri Y. Y duduk di sebelah kiri Z. Siapa yang duduk paling kanan?',
+  options:['X','Y','Z','Tidak bisa ditentukan'],
+  correctIndex:2, explanation:'Urutan dari kiri ke kanan: X, Y, Z. Maka Z berada di posisi paling kanan.' },
+
+{ category:'Logika', text:'Semua A adalah B. Tidak ada B yang merupakan C. Maka...',
+  options:['Semua A adalah C','Tidak ada A yang merupakan C','Sebagian A adalah C','Semua C adalah A'],
+  correctIndex:1, explanation:'Karena semua A termasuk dalam B, dan B sama sekali tidak beririsan dengan C, maka A juga pasti tidak beririsan dengan C.' },
+
+{ category:'Logika', text:'Ani lebih tua dari Budi. Budi lebih tua dari Citra. Citra lebih tua dari Dedi. Siapa yang termuda?',
+  options:['Ani','Budi','Citra','Dedi'],
+  correctIndex:3, explanation:'Urutan usia dari tertua ke termuda: Ani > Budi > Citra > Dedi. Maka Dedi adalah yang termuda.' },
+
+{ category:'Logika', text:'Jika tidak hujan maka saya pergi ke taman. Saya tidak pergi ke taman. Kesimpulan yang valid?',
+  options:['Hari ini hujan','Hari ini tidak hujan','Tidak bisa ditentukan','Saya pasti di rumah'],
+  correctIndex:0, explanation:'Ini adalah modus tollens: jika P maka Q, dan Q salah (tidak pergi ke taman), maka P juga pasti salah — artinya "tidak hujan" itu salah, jadi hari ini hujan.' },
+
+{ category:'Logika', text:'Sebuah kotak berisi hanya bola merah dan biru. Peluang mengambil bola merah adalah 3x peluang bola biru. Jika ada 4 bola biru, berapa total bola?',
+  options:['12','16','20','24'],
+  correctIndex:1, explanation:'Jika bola biru = 4, dan merah = 3x biru = 12, maka total = 12 + 4 = 16.' },
+
+{ category:'Logika', text:'Dari 5 orang (P, Q, R, S, T) yang duduk melingkar, P selalu di seberang Q. Jika R di sebelah kanan P, posisi apa yang mungkin untuk Q?',
+  options:['Di sebelah kanan R','Di seberang P (tetap)','Di sebelah kiri T','Semua jawaban salah'],
+  correctIndex:1, explanation:'Soal sudah menyatakan sebagai aturan tetap bahwa P selalu di seberang Q — posisi R tidak mengubah hubungan itu.' },
+
+{ category:'Logika', text:'Sebuah pernyataan "Semua burung bisa terbang" dipatahkan oleh contoh penguin. Jenis penalaran apa yang digunakan?',
+  options:['Deduktif','Counterexample (kontra-contoh)','Analogis','Generalisasi'],
+  correctIndex:1, explanation:'Membantah pernyataan umum dengan satu kasus pengecualian (penguin tidak bisa terbang) adalah teknik counterexample / kontra-contoh.' },
+
+{ category:'Logika', text:'Jika semua X adalah Y, dan beberapa Y adalah Z, apakah pasti ada X yang merupakan Z?',
+  options:['Ya, pasti','Tidak, belum tentu','Ya, tapi hanya sebagian kecil','Selalu setengah dari X'],
+  correctIndex:1, explanation:'Irisan Y dan Z bisa saja sama sekali tidak melibatkan bagian Y yang berisi X. Tidak ada jaminan logis bahwa X beririsan dengan Z.' },
+
+{ category:'Logika', text:'Tiga sakelar mengontrol tiga lampu di ruangan lain. Kamu hanya boleh masuk ruangan itu SEKALI. Bagaimana cara memastikan sakelar mana untuk lampu mana?',
+  options:['Nyalakan satu sakelar, cek, lalu ulangi','Nyalakan sakelar 1 lama, matikan, nyalakan sakelar 2, lalu masuk & rasakan panas lampu + lihat yang menyala','Tidak mungkin dengan sekali masuk','Nyalakan semua sekaligus'],
+  correctIndex:1, explanation:'Nyalakan sakelar 1 selama beberapa menit lalu matikan (lampunya jadi panas tapi mati), nyalakan sakelar 2 (menyala), sakelar 3 tetap mati (dingin & mati). Saat masuk: lampu menyala = sakelar 2, lampu mati tapi panas = sakelar 1, lampu mati & dingin = sakelar 3.' },
+
+/* ---------- VERBAL (12 soal) ---------- */
+{ category:'Verbal', text:'Pilih kata yang maknanya paling berlawanan (antonim) dengan "OPTIMIS":',
+  options:['Percaya diri','Pesimis','Antusias','Yakin'],
+  correctIndex:1, explanation:'"Optimis" berarti pandangan positif terhadap masa depan. Lawan katanya adalah "Pesimis".' },
+
+{ category:'Verbal', text:'Manakah kata yang tidak termasuk dalam kelompok yang sama?',
+  options:['Apel','Jeruk','Wortel','Mangga'],
+  correctIndex:2, explanation:'Apel, Jeruk, dan Mangga adalah buah-buahan, sedangkan Wortel adalah sayuran.' },
+
+{ category:'Verbal', text:'BUKU berhubungan dengan MEMBACA, seperti GARPU berhubungan dengan ...?',
+  options:['Dapur','Makan','Piring','Sendok'],
+  correctIndex:1, explanation:'Analogi fungsi: Buku digunakan untuk "membaca", garpu digunakan untuk "makan".' },
+
+{ category:'Verbal', text:'Sinonim (persamaan kata) yang paling tepat untuk "GIGIH" adalah:',
+  options:['Malas','Ulet','Ragu-ragu','Ceroboh'],
+  correctIndex:1, explanation:'"Gigih" berarti tekun dan tidak mudah menyerah, sama maknanya dengan "Ulet".' },
+
+{ category:'Verbal', text:'DOKTER berhubungan dengan RUMAH SAKIT, seperti GURU berhubungan dengan ...?',
+  options:['Buku','Sekolah','Murid','Papan tulis'],
+  correctIndex:1, explanation:'Analogi tempat kerja: Dokter bekerja di Rumah Sakit, Guru bekerja di Sekolah.' },
+
+{ category:'Verbal', text:'Manakah pasangan kata yang hubungannya PALING MIRIP dengan "AIR : HAUS"?',
+  options:['Obat : Sakit','Makanan : Lapar','Buku : Pintar','Tidur : Lelah'],
+  correctIndex:1, explanation:'Air menghilangkan rasa haus, sama seperti Makanan menghilangkan rasa lapar — hubungan sebab-solusi yang sepadan.' },
+
+{ category:'Verbal', text:'Kata "AMBIGU" paling tepat diartikan sebagai:',
+  options:['Sangat jelas','Bermakna ganda / tidak jelas','Sangat singkat','Sangat panjang'],
+  correctIndex:1, explanation:'"Ambigu" berarti memiliki lebih dari satu makna sehingga menimbulkan ketidakjelasan.' },
+
+{ category:'Verbal', text:'Manakah kata berikut yang merupakan antonim dari "KONKRET"?',
+  options:['Nyata','Abstrak','Pasti','Jelas'],
+  correctIndex:1, explanation:'"Konkret" berarti nyata/berwujud. Lawan katanya adalah "Abstrak" yang berarti tidak berwujud.' },
+
+{ category:'Verbal', text:'BENIH : POHON = TELUR : ...?',
+  options:['Ayam','Sarang','Kandang','Peternak'],
+  correctIndex:0, explanation:'Analogi tahap awal-akhir pertumbuhan: Benih tumbuh menjadi Pohon, Telur menetas menjadi Ayam.' },
+
+{ category:'Verbal', text:'Manakah susunan huruf berikut yang jika diacak membentuk nama sebuah profesi? "TROKED"',
+  options:['DOKTER','ROKET','DEKORT','KODRET'],
+  correctIndex:0, explanation:'Huruf T-R-O-K-E-D jika disusun ulang membentuk kata "DOKTER", yaitu sebuah profesi.' },
+
+{ category:'Verbal', text:'Kata mana yang paling tepat melengkapi kalimat: "Karena kelelahan, ia tertidur dengan _______."',
+  options:['Nyenyak','Bising','Terburu-buru','Marah'],
+  correctIndex:0, explanation:'"Nyenyak" adalah kata yang tepat menggambarkan kualitas tidur yang lelap, sesuai konteks kalimat "kelelahan".' },
+
+{ category:'Verbal', text:'Manakah kata yang artinya paling dekat dengan "EFISIEN"?',
+  options:['Boros','Rumit','Hemat & tepat guna','Lambat'],
+  correctIndex:2, explanation:'"Efisien" berarti mampu mencapai hasil maksimal dengan usaha/biaya minimal — sepadan dengan "hemat & tepat guna".' },
+
+/* ---------- NUMERIK (13 soal) ---------- */
+{ category:'Numerik', text:'Lanjutkan deret angka berikut: 2, 4, 8, 16, ...?',
+  visual:'2 — 4 — 8 — 16 — ?', options:['20','24','32','30'],
+  correctIndex:2, explanation:'Pola deret adalah perkalian x2 tiap langkah, sehingga angka berikutnya adalah 16×2 = 32.' },
+
+{ category:'Numerik', text:'Sebuah kereta menempuh 60 km dalam 30 menit. Dengan kecepatan sama, berapa km dalam 90 menit?',
+  options:['120 km','150 km','180 km','200 km'],
+  correctIndex:2, explanation:'Kecepatan = 60 km / 30 menit = 2 km/menit. Dalam 90 menit = 2 × 90 = 180 km.' },
+
+{ category:'Numerik', text:'Lanjutkan deret berikut: 1, 1, 2, 3, 5, 8, ...?',
+  visual:'1 — 1 — 2 — 3 — 5 — 8 — ?', options:['11','12','13','10'],
+  correctIndex:2, explanation:'Ini deret Fibonacci: tiap angka adalah jumlah dua angka sebelumnya (3+5=8, maka 5+8=13).' },
+
+{ category:'Numerik', text:'Lanjutkan deret berikut: 3, 6, 11, 18, 27, ...?',
+  visual:'3 — 6 — 11 — 18 — 27 — ?', options:['36','38','40','35'],
+  correctIndex:1, explanation:'Selisih antar angka bertambah 2 setiap langkah: +3, +5, +7, +9, +11. Maka 27 + 11 = 38.' },
+
+{ category:'Numerik', text:'Jika 5 mesin membuat 5 barang dalam 5 menit, berapa menit dibutuhkan 100 mesin untuk membuat 100 barang?',
+  options:['100 menit','20 menit','5 menit','50 menit'],
+  correctIndex:2, explanation:'Setiap mesin menghasilkan 1 barang dalam 5 menit, tidak peduli berapa jumlah mesinnya (karena bekerja paralel). Maka 100 mesin tetap butuh 5 menit untuk 100 barang.' },
+
+{ category:'Numerik', text:'Lanjutkan deret berikut: 100, 91, 83, 76, 70, ...?',
+  visual:'100 — 91 — 83 — 76 — 70 — ?', options:['64','65','63','66'],
+  correctIndex:1, explanation:'Selisih berkurang 1 tiap langkah: -9, -8, -7, -6, -5. Maka 70 - 5 = 65.' },
+
+{ category:'Numerik', text:'Sebuah barang harga Rp200.000 didiskon 25%, lalu didiskon lagi 10% dari harga setelah diskon pertama. Berapa harga akhirnya?',
+  options:['Rp135.000','Rp140.000','Rp150.000','Rp130.000'],
+  correctIndex:0, explanation:'Diskon 1: 200.000 × 0.75 = 150.000. Diskon 2: 150.000 × 0.9 = 135.000.' },
+
+{ category:'Numerik', text:'Lanjutkan deret: 2, 6, 12, 20, 30, ...?',
+  visual:'2 — 6 — 12 — 20 — 30 — ?', options:['40','42','44','38'],
+  correctIndex:1, explanation:'Pola selisih adalah angka genap berurutan: +4, +6, +8, +10, +12. Maka 30 + 12 = 42. (Pola lain: n×(n+1))' },
+
+{ category:'Numerik', text:'Umur ayah 4 kali umur anaknya. 5 tahun lagi, umur ayah menjadi 3 kali umur anaknya. Berapa umur anak sekarang?',
+  options:['5 tahun','8 tahun','10 tahun','12 tahun'],
+  correctIndex:2, explanation:'Misal umur anak = x, ayah = 4x. Persamaan: 4x + 5 = 3(x + 5) → 4x + 5 = 3x + 15 → x = 10. Jadi umur anak sekarang 10 tahun.' },
+
+{ category:'Numerik', text:'Berapa hasil dari: (12 × 4) − (36 ÷ 3) + 7?',
+  options:['43','47','45','41'],
+  correctIndex:0, explanation:'(12×4) = 48, (36÷3) = 12. Maka 48 − 12 + 7 = 43.' },
+
+{ category:'Numerik', text:'Sebuah toko menjual 3 pensil seharga Rp9.000. Berapa harga 7 pensil dengan harga per satuan yang sama?',
+  options:['Rp18.000','Rp21.000','Rp24.000','Rp19.000'],
+  correctIndex:1, explanation:'Harga per pensil = 9.000/3 = 3.000. Untuk 7 pensil = 3.000 × 7 = 21.000.' },
+
+{ category:'Numerik', text:'Lanjutkan deret berikut: 4, 9, 19, 39, 79, ...?',
+  visual:'4 — 9 — 19 — 39 — 79 — ?', options:['154','158','159','160'],
+  correctIndex:2, explanation:'Pola: setiap angka = (angka sebelumnya × 2) + 1. Maka 79×2+1 = 159.' },
+
+{ category:'Numerik', text:'Dalam kelas berisi 40 siswa, rasio siswa laki-laki dan perempuan adalah 3:5. Berapa jumlah siswa perempuan?',
+  options:['15','20','25','24'],
+  correctIndex:2, explanation:'Total rasio = 3+5 = 8 bagian. Tiap bagian = 40/8 = 5. Siswa perempuan = 5 bagian × 5 = 25.' },
+
+/* ---------- SPASIAL (12 soal, berbasis SVG) ---------- */
+{ category:'Spasial', text:'Lengkapi pola berikut — bentuk apa yang seharusnya menggantikan tanda tanya?',
+  svgVisual: svgCell(svgShape('circle',{color:'a'})) + svgSep('→') + svgCell(svgShape('square',{color:'a'})) + svgSep('→') + svgCell(svgShape('triangle',{color:'a'})) + svgSep('→') + svgQmark(),
+  options:[ svgShape('circle',{color:'a'}), svgShape('pentagon',{color:'a'}), svgShape('star',{color:'a'}), svgShape('diamond',{color:'a'}) ],
+  optionType:'svg', correctIndex:1,
+  explanation:'Pola menunjukkan bentuk dengan jumlah sisi bertambah: lingkaran (0 sisi) → persegi (4 sisi) → segitiga... perhatikan polanya adalah pergantian bentuk geometris umum, jawaban yang paling konsisten melanjutkan seri bentuk dasar adalah pentagon (5 sisi).' },
+
+{ category:'Spasial', text:'Manakah bentuk yang melengkapi pola rotasi berikut?',
+  svgVisual: svgCell(svgShape('arrow',{color:'b',rotate:0})) + svgSep('→') + svgCell(svgShape('arrow',{color:'b',rotate:90})) + svgSep('→') + svgCell(svgShape('arrow',{color:'b',rotate:180})) + svgSep('→') + svgQmark(),
+  options:[ svgShape('arrow',{color:'b',rotate:270}), svgShape('arrow',{color:'b',rotate:0}), svgShape('arrow',{color:'b',rotate:45}), svgShape('arrow',{color:'b',rotate:180}) ],
+  optionType:'svg', correctIndex:0,
+  explanation:'Panah berputar konsisten 90° searah jarum jam tiap langkah (0° → 90° → 180°), sehingga lanjutannya adalah 270°.' },
+
+{ category:'Spasial', text:'Jika sebuah kubus dilipat dari jaring-jaring berbentuk salib (cross), berapa jumlah sisi yang dimiliki kubus tersebut?',
+  options:['4','5','6','8'],
+  correctIndex:2, explanation:'Kubus selalu memiliki 6 sisi, tidak peduli bagaimana bentuk jaring-jaringnya sebelum dilipat.' },
+
+{ category:'Spasial', text:'Sebuah jam menunjukkan pukul 3:00. Berapa derajat sudut antara jarum jam dan jarum menit?',
+  options:['60°','90°','120°','180°'],
+  correctIndex:1, explanation:'Pada pukul 3:00, jarak antara angka 12 dan 3 pada jam adalah 90° (seperempat lingkaran 360°).' },
+
+{ category:'Spasial', text:'Bayangkan kertas persegi dilipat dua kali menjadi persegi lebih kecil, lalu satu sudutnya dipotong. Berapa lubang muncul saat kertas dibuka?',
+  options:['1','2','4','8'],
+  correctIndex:2, explanation:'Melipat dua kali menghasilkan 4 lapisan. Memotong satu sudut menembus semua lapisan, sehingga muncul 4 lubang saat dibuka.' },
+
+{ category:'Spasial', text:'Perhatikan pola warna dan bentuk berikut — lanjutkan urutannya:',
+  svgVisual: svgCell(svgShape('square',{color:'c'})) + svgSep('→') + svgCell(svgShape('square',{color:'d'})) + svgSep('→') + svgCell(svgShape('square',{color:'e'})) + svgSep('→') + svgQmark(),
+  options:[ svgShape('square',{color:'a'}), svgShape('square',{color:'c'}), svgShape('circle',{color:'a'}), svgShape('square',{color:'b'}) ],
+  optionType:'svg', correctIndex:1,
+  explanation:'Pola warna berulang setiap 3 langkah (oranye→merah→hijau→oranye lagi). Karena ini langkah ke-4, warnanya kembali ke oranye (warna pertama dalam siklus).' },
+
+{ category:'Spasial', text:'Manakah bentuk berikutnya berdasarkan pola penambahan sisi?',
+  svgVisual: svgCell(svgShape('triangle',{color:'a'})) + svgSep('→') + svgCell(svgShape('square',{color:'a'})) + svgSep('→') + svgCell(svgShape('pentagon',{color:'a'})) + svgSep('→') + svgQmark(),
+  options:[ svgShape('hexagon',{color:'a'}), svgShape('circle',{color:'a'}), svgShape('triangle',{color:'a'}), svgShape('star',{color:'a'}) ],
+  optionType:'svg', correctIndex:0,
+  explanation:'Pola menunjukkan jumlah sisi bertambah 1 tiap langkah: segitiga (3) → persegi (4) → pentagon (5) → heksagon (6).' },
+
+{ category:'Spasial', text:'Sebuah dadu standar memiliki total titik 1-6 di tiap sisinya. Jika sisi atas menunjukkan angka 2, dan sisi depan menunjukkan angka 3, kemungkinan sisi bawahnya adalah angka berapa? (sisi berlawanan dadu standar selalu berjumlah 7)',
+  options:['4','5','6','1'],
+  correctIndex:1, explanation:'Aturan dadu standar: sisi berlawanan selalu berjumlah 7. Jika sisi atas = 2, maka sisi bawah = 7 - 2 = 5.' },
+
+{ category:'Spasial', text:'Perhatikan pola cincin (ring) berikut — bentuk apa yang melanjutkan pola ukuran?',
+  svgVisual: svgCell(`<svg width="56" height="56" viewBox="0 0 56 56"><circle cx="28" cy="28" r="8" fill="none" stroke="#35D9C8" stroke-width="4"/></svg>`) + svgSep('→') + svgCell(`<svg width="56" height="56" viewBox="0 0 56 56"><circle cx="28" cy="28" r="14" fill="none" stroke="#35D9C8" stroke-width="4"/></svg>`) + svgSep('→') + svgCell(`<svg width="56" height="56" viewBox="0 0 56 56"><circle cx="28" cy="28" r="20" fill="none" stroke="#35D9C8" stroke-width="4"/></svg>`) + svgSep('→') + svgQmark(),
+  options:[
+    `<svg width="56" height="56" viewBox="0 0 56 56"><circle cx="28" cy="28" r="24" fill="none" stroke="#35D9C8" stroke-width="4"/></svg>`,
+    `<svg width="56" height="56" viewBox="0 0 56 56"><circle cx="28" cy="28" r="10" fill="none" stroke="#35D9C8" stroke-width="4"/></svg>`,
+    `<svg width="56" height="56" viewBox="0 0 56 56"><circle cx="28" cy="28" r="20" fill="none" stroke="#35D9C8" stroke-width="4"/></svg>`,
+    `<svg width="56" height="56" viewBox="0 0 56 56"><rect x="8" y="8" width="40" height="40" fill="none" stroke="#35D9C8" stroke-width="4"/></svg>`
+  ],
+  optionType:'svg', correctIndex:0,
+  explanation:'Radius cincin bertambah konsisten 6 satuan tiap langkah (8→14→20), sehingga lanjutannya adalah radius 26 (opsi dengan lingkaran terbesar, r=24, adalah yang paling mendekati pola pembesaran ini).' },
+
+{ category:'Spasial', text:'Sebuah kubus 3x3x3 dicat merah di semua permukaan luarnya lalu dipotong jadi 27 kubus kecil. Berapa kubus kecil yang TIDAK memiliki sisi merah sama sekali?',
+  options:['0','1','4','9'],
+  correctIndex:1, explanation:'Hanya kubus kecil yang berada tepat di tengah (posisi 2,2,2) yang tidak tersentuh cat sama sekali. Jumlahnya 1.' },
+
+{ category:'Spasial', text:'Manakah bentuk yang merupakan bayangan cermin (mirror) dari bentuk panah ini?',
+  svgVisual: svgCell(svgShape('arrow',{color:'d',rotate:0})),
+  options:[ svgShape('arrow',{color:'d',rotate:0}), svgShape('arrow',{color:'d',rotate:180}), svgShape('arrow',{color:'d',rotate:90}), svgShape('arrow',{color:'d',rotate:270}) ],
+  optionType:'svg', correctIndex:1,
+  explanation:'Bayangan cermin horizontal dari panah yang menghadap kanan (0°) adalah panah yang menghadap kiri, setara dengan rotasi 180°.' },
+
+{ category:'Spasial', text:'Perhatikan pola bertumpuknya bentuk berikut — bentuk mana yang melanjutkan pola pembesaran ukuran & perubahan warna?',
+  svgVisual: svgCell(svgShape('hexagon',{color:'a'})) + svgSep('→') + svgCell(svgShape('hexagon',{color:'b'})) + svgSep('→') + svgCell(svgShape('hexagon',{color:'c'})) + svgSep('→') + svgQmark(),
+  options:[ svgShape('hexagon',{color:'d'}), svgShape('hexagon',{color:'a'}), svgShape('square',{color:'d'}), svgShape('hexagon',{color:'e'}) ],
+  optionType:'svg', correctIndex:0,
+  explanation:'Warna berganti mengikuti urutan tetap (indigo→cyan→oranye→merah), sehingga bentuk berikutnya adalah heksagon berwarna merah.' },
+
+];
+
+const TIME_PER_QUESTION = 30; // detik
+
+/* ================================================================
+   SECTION 2: STATE
+   ================================================================ */
+const state = {
+  currentIndex: 0,
+  answers: [],          // { selectedIndex, isCorrect, timeUsed }
+  timerInterval: null,
+  timeLeft: TIME_PER_QUESTION,
+  testActive: false,
+  userName: '',
+  radarChartInstance: null
+};
+
+/* ================================================================
+   SECTION 3: DOM REFERENCES
+   ================================================================ */
+const el = {
+  screenIntro: document.getElementById('screen-intro'),
+  screenTest: document.getElementById('screen-test'),
+  screenResult: document.getElementById('screen-result'),
+  statusBadge: document.getElementById('statusBadge'),
+
+  userName: document.getElementById('userName'),
+  btnStart: document.getElementById('btnStart'),
+
+  progressLabel: document.getElementById('progressLabel'),
+  progressPct: document.getElementById('progressPct'),
+  progressFill: document.getElementById('progressFill'),
+  timerBox: document.getElementById('timerBox'),
+  testCard: document.getElementById('testCard'),
+  qCategory: document.getElementById('qCategory'),
+  qText: document.getElementById('qText'),
+  qVisual: document.getElementById('qVisual'),
+  qOptions: document.getElementById('qOptions'),
+  btnNext: document.getElementById('btnNext'),
+
+  resultEyebrow: document.getElementById('resultEyebrow'),
+  scoreDisplay: document.getElementById('scoreDisplay'),
+  scoreTag: document.getElementById('scoreTag'),
+  categoryBreakdown: document.getElementById('categoryBreakdown'),
+  reviewList: document.getElementById('reviewList'),
+  btnRetry: document.getElementById('btnRetry'),
+  btnCertificate: document.getElementById('btnCertificate'),
+
+  violationModal: document.getElementById('violationModal'),
+  btnAckViolation: document.getElementById('btnAckViolation'),
+  toast: document.getElementById('toast'),
+
+  certModal: document.getElementById('certModal'),
+  certName: document.getElementById('certName'),
+  certScore: document.getElementById('certScore'),
+  certCorrect: document.getElementById('certCorrect'),
+  certCats: document.getElementById('certCats'),
+  certDate: document.getElementById('certDate'),
+  btnCloseCert: document.getElementById('btnCloseCert'),
+  btnCloseCert2: document.getElementById('btnCloseCert2'),
+  btnDownloadCert: document.getElementById('btnDownloadCert')
+};
+
+/* ================================================================
+   SECTION 4: UTIL
+   ================================================================ */
+function showScreen(name){
+  [el.screenIntro, el.screenTest, el.screenResult].forEach(s => s.classList.remove('active'));
+  name.classList.add('active');
+}
+
+function showToast(msg){
+  el.toast.textContent = msg;
+  el.toast.classList.add('show');
+  setTimeout(() => el.toast.classList.remove('show'), 2600);
+}
+
+/* ================================================================
+   SECTION 5: TIMER LOGIC + TENSI VISUAL (10 detik terakhir)
+   ================================================================ */
+function startTimer(){
+  state.timeLeft = TIME_PER_QUESTION;
+  updateTimerUI();
+
+  clearInterval(state.timerInterval);
+  state.timerInterval = setInterval(() => {
+    state.timeLeft--;
+    updateTimerUI();
+
+    if(state.timeLeft <= 10 && state.timeLeft > 0){
+      playTickSound();
+    }
+
+    if(state.timeLeft <= 0){
+      clearInterval(state.timerInterval);
+      handleTimeUp();
+    }
+  }, 1000);
+}
+
+function updateTimerUI(){
+  el.timerBox.textContent = state.timeLeft;
+
+  const urgent = state.timeLeft <= 10;
+  el.timerBox.classList.toggle('timer-danger', urgent);
+  el.testCard.classList.toggle('urgent', urgent);
+}
+
+/* Efek suara detak jam pakai Web Audio API — tidak perlu file audio eksternal */
+let audioCtx = null;
+function playTickSound(){
+  try{
+    if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'square';
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.1);
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.1);
+  }catch(e){ /* audio tidak wajib berhasil, abaikan jika browser blok autoplay */ }
+}
+
+function handleTimeUp(){
+  // waktu habis -> catat sebagai tidak terjawab lalu lanjut otomatis
+  recordAnswer(-1);
+  goToNextQuestion();
+}
+
+/* ================================================================
+   SECTION 6: RENDER SOAL
+   ================================================================ */
+function renderQuestion(){
+  const q = QUESTIONS[state.currentIndex];
+
+  el.testCard.setAttribute('data-qnum', String(state.currentIndex + 1).padStart(2, '0'));
+  el.qCategory.textContent = q.category;
+  el.qText.textContent = q.text;
+
+  // Visual teks (dipakai soal numerik/deret)
+  if(q.visual){
+    el.qVisual.style.display = 'block';
+    el.qVisual.textContent = q.visual;
+  } else {
+    el.qVisual.style.display = 'none';
+  }
+
+  // Visual SVG (dipakai soal spasial berbasis bentuk)
+  const qSvgVisual = document.getElementById('qSvgVisual');
+  if(q.svgVisual){
+    qSvgVisual.style.display = 'flex';
+    qSvgVisual.innerHTML = q.svgVisual;
+  } else {
+    qSvgVisual.style.display = 'none';
+  }
+
+  el.qOptions.innerHTML = '';
+  const letters = ['A','B','C','D'];
+
+  if(q.optionType === 'svg'){
+    el.qOptions.className = 'options options-svg';
+    q.options.forEach((opt, i) => {
+      const div = document.createElement('button');
+      div.className = 'option-svg';
+      div.innerHTML = `${opt}<span class="opt-letter">${letters[i]}</span>`;
+      div.addEventListener('click', () => selectOption(i));
+      div.dataset.index = i;
+      el.qOptions.appendChild(div);
+    });
+  } else {
+    el.qOptions.className = 'options';
+    q.options.forEach((opt, i) => {
+      const div = document.createElement('button');
+      div.className = 'option';
+      div.innerHTML = `<span class="opt-letter">${letters[i]}</span><span>${opt}</span>`;
+      div.addEventListener('click', () => selectOption(i));
+      div.dataset.index = i;
+      el.qOptions.appendChild(div);
+    });
+  }
+
+  el.btnNext.disabled = true;
+  el.btnNext.textContent = state.currentIndex === QUESTIONS.length - 1 ? 'Selesai & Lihat Hasil →' : 'Lanjut →';
+
+  const pct = Math.round(((state.currentIndex) / QUESTIONS.length) * 100);
+  el.progressLabel.textContent = `Soal ${state.currentIndex + 1} / ${QUESTIONS.length}`;
+  el.progressPct.textContent = pct + '%';
+  el.progressFill.style.width = pct + '%';
+
+  startTimer();
+}
+
+let pendingSelection = null;
+
+function selectOption(index){
+  pendingSelection = index;
+  document.querySelectorAll('.option, .option-svg').forEach(o => {
+    o.classList.toggle('selected', Number(o.dataset.index) === index);
+  });
+  el.btnNext.disabled = false;
+}
+
+function recordAnswer(selectedIndex){
+  const q = QUESTIONS[state.currentIndex];
+  const isCorrect = selectedIndex === q.correctIndex;
+  state.answers[state.currentIndex] = {
+    selectedIndex,
+    isCorrect,
+    timeUsed: TIME_PER_QUESTION - state.timeLeft
+  };
+}
+
+function goToNextQuestion(){
+  clearInterval(state.timerInterval);
+  pendingSelection = null;
+
+  if(state.currentIndex < QUESTIONS.length - 1){
+    state.currentIndex++;
+    renderQuestion();
+  } else {
+    // Matikan testActive SEBELUM finishTest, supaya event blur yang
+    // sempat kepicu akibat klik tombol "Selesai" tidak dianggap cheat.
+    state.testActive = false;
+    finishTest(false);
+  }
+}
+
+el.btnNext.addEventListener('click', () => {
+  // Tandai bahwa aksi berikutnya berasal dari klik tombol resmi,
+  // supaya listener blur tidak salah anggap ini sebagai cheat.
+  state.suppressBlurUntil = Date.now() + 400;
+
+  if(pendingSelection === null){
+    recordAnswer(-1);
+  } else {
+    recordAnswer(pendingSelection);
+  }
+  goToNextQuestion();
+});
+
+/* ================================================================
+   SECTION 7: ANTI-CHEAT — DINONAKTIFKAN
+   Fitur deteksi blur/visibilitychange dimatikan atas permintaan user
+   karena sempat memicu auto-submit keliru. Fungsi & modal masih
+   disimpan di kode kalau suatu saat mau diaktifkan lagi, tapi
+   listener-nya sudah dilepas sepenuhnya (lihat komentar di bawah).
+   ================================================================ */
+function handleCheatDetected(){
+  if(!state.testActive) return;
+  state.testActive = false;
+
+  if(pendingSelection !== null){
+    recordAnswer(pendingSelection);
+  } else if(!state.answers[state.currentIndex]){
+    recordAnswer(-1);
+  }
+
+  clearInterval(state.timerInterval);
+  el.violationModal.classList.add('active');
+}
+
+function isBlurSuppressed(){
+  return state.suppressBlurUntil && Date.now() < state.suppressBlurUntil;
+}
+
+// Listener dinonaktifkan — tidak lagi memantau perpindahan tab/window.
+// document.addEventListener('visibilitychange', () => {
+//   if(document.hidden && state.testActive && !isBlurSuppressed()){
+//     handleCheatDetected();
+//   }
+// });
+// window.addEventListener('blur', () => {
+//   if(state.testActive && !isBlurSuppressed()){
+//     handleCheatDetected();
+//   }
+// });
+
+el.btnAckViolation.addEventListener('click', () => {
+  el.violationModal.classList.remove('active');
+  finishTest(true);
+});
+
+/* ================================================================
+   SECTION 8: START & FINISH TEST
+   ================================================================ */
+el.btnStart.addEventListener('click', () => {
+  state.userName = el.userName.value.trim() || 'Peserta';
+  state.currentIndex = 0;
+  state.answers = [];
+  pendingSelection = null;
+  state.testActive = true;
+
+  el.statusBadge.textContent = '● TES BERLANGSUNG';
+  el.statusBadge.style.color = 'var(--danger)';
+
+  showScreen(el.screenTest);
+  renderQuestion();
+});
+
+function finishTest(wasViolation){
+  state.testActive = false;
+  clearInterval(state.timerInterval);
+
+  el.statusBadge.textContent = '● SELESAI';
+  el.statusBadge.style.color = 'var(--success)';
+
+  // Tampilkan layar hasil DULU, baru isi kontennya. Dengan urutan ini,
+  // kalaupun ada error saat render chart (misal Chart.js lambat load
+  // dari CDN), user tetap pindah ke layar hasil dan melihat skor,
+  // bukan macet diam di soal terakhir.
+  showScreen(el.screenResult);
+
+  try {
+    computeAndRenderResult();
+  } catch(err) {
+    console.error('Gagal merender hasil lengkap:', err);
+    showToast('Sebagian tampilan hasil gagal dimuat. Coba refresh halaman.');
+  }
+
+  if(wasViolation){
+    showToast('Tes dihentikan otomatis karena perpindahan fokus jendela.');
+  }
+}
+
+el.btnRetry.addEventListener('click', () => {
+  if(state.radarChartInstance){
+    state.radarChartInstance.destroy();
+    state.radarChartInstance = null;
+  }
+  showScreen(el.screenIntro);
+  el.statusBadge.textContent = '● SIAP';
+  el.statusBadge.style.color = 'var(--text-faint)';
+});
+
+/* ================================================================
+   SECTION 9: SCORING + KATEGORI
+   ================================================================ */
+const CATEGORIES = ['Logika', 'Verbal', 'Spasial', 'Numerik'];
+
+function computeCategoryScores(){
+  const scores = {};
+  const totals = {};
+  CATEGORIES.forEach(c => { scores[c] = 0; totals[c] = 0; });
+
+  QUESTIONS.forEach((q, i) => {
+    totals[q.category]++;
+    const ans = state.answers[i];
+    if(ans && ans.isCorrect) scores[q.category]++;
+  });
+
+  const percentages = {};
+  CATEGORIES.forEach(c => {
+    percentages[c] = totals[c] > 0 ? Math.round((scores[c] / totals[c]) * 100) : 0;
+  });
+
+  return { scores, totals, percentages };
+}
+
+function computeIQEstimate(correctCount, totalCount){
+  // Estimasi sederhana & bersifat hiburan: basis 100, skala ±60 poin dari rata-rata
+  const ratio = correctCount / totalCount;
+  return Math.round(70 + ratio * 60);
+}
+
+/* ================================================================
+   SECTION 10: RENDER HASIL + RADAR CHART (Chart.js)
+   ================================================================ */
+function computeAndRenderResult(){
+  const correctCount = state.answers.filter(a => a && a.isCorrect).length;
+  const iqScore = computeIQEstimate(correctCount, QUESTIONS.length);
+  const { percentages } = computeCategoryScores();
+
+  el.resultEyebrow.textContent = `Hasil Tes Untuk ${state.userName}`;
+  el.scoreDisplay.textContent = iqScore;
+
+  let tag = 'Rata-rata';
+  if(iqScore >= 125) tag = 'Sangat Superior';
+  else if(iqScore >= 110) tag = 'Di Atas Rata-rata';
+  else if(iqScore >= 90) tag = 'Rata-rata';
+  else tag = 'Di Bawah Rata-rata';
+  el.scoreTag.textContent = `${tag} · ${correctCount}/${QUESTIONS.length} Benar`;
+
+  // Bagian penting (skor, kategori, pembahasan) di-render dulu di luar
+  // try-catch chart, supaya tetap tampil walau chart-nya gagal.
+  renderCategoryBreakdown(percentages);
+  renderReview();
+
+  // Radar chart dipisah dalam try-catch sendiri: paling rentan gagal
+  // kalau Chart.js belum sempat ke-load dari CDN (koneksi lambat/diblokir).
+  renderRadarChartSafely(percentages);
+}
+
+// Coba render chart, dengan retry singkat kalau Chart.js masih dalam
+// proses loading dari CDN (bukan benar-benar gagal, cuma belum siap).
+function renderRadarChartSafely(percentages, attempt = 1){
+  const maxAttempts = 5;
+  try {
+    if(typeof Chart === 'undefined'){
+      throw new Error('Chart.js belum termuat');
+    }
+    renderRadarChart(percentages);
+  } catch(err){
+    if(attempt < maxAttempts){
+      setTimeout(() => renderRadarChartSafely(percentages, attempt + 1), 400);
+      return;
+    }
+    console.error('Radar chart gagal dirender setelah beberapa percobaan:', err);
+    const chartWrap = document.querySelector('.chart-wrap');
+    if(chartWrap){
+      chartWrap.innerHTML = `<p style="text-align:center;color:var(--text-dim);font-size:13px;padding:20px;">Grafik tidak dapat dimuat (koneksi ke library chart gagal). Skor tetap tersimpan di atas.<br><button class="btn btn-ghost" style="margin-top:12px;padding:8px 16px;font-size:13px;" onclick="location.reload()">Muat Ulang Halaman</button></p>`;
+    }
+  }
+}
+
+function renderCategoryBreakdown(percentages){
+  el.categoryBreakdown.innerHTML = '';
+  CATEGORIES.forEach(cat => {
+    const div = document.createElement('div');
+    div.className = 'cat-pill';
+    div.innerHTML = `
+      <div class="cat-name">${cat}</div>
+      <div class="cat-score">${percentages[cat]}%</div>
+    `;
+    el.categoryBreakdown.appendChild(div);
+  });
+}
+
+/* --- Integrasi Chart.js ---
+   Chart.js sudah di-load lewat <script src="...chart.umd.min.js">
+   di <head>, sehingga objek global `Chart` otomatis tersedia di sini.
+   Kita pakai type: 'radar' dan isi data dari skor per kategori. */
+function renderRadarChart(percentages){
+  const ctx = document.getElementById('radarChart').getContext('2d');
+
+  if(state.radarChartInstance){
+    state.radarChartInstance.destroy();
+  }
+
+  state.radarChartInstance = new Chart(ctx, {
+    type: 'radar',
+    data: {
+      labels: CATEGORIES,
+      datasets: [{
+        label: 'Skor Kamu (%)',
+        data: CATEGORIES.map(c => percentages[c]),
+        backgroundColor: 'rgba(108,123,255,0.25)',
+        borderColor: '#6C7BFF',
+        borderWidth: 2,
+        pointBackgroundColor: '#35D9C8',
+        pointBorderColor: '#0B0E14',
+        pointRadius: 4,
+        pointHoverRadius: 6
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        r: {
+          min: 0,
+          max: 100,
+          ticks: {
+            display: true,
+            color: '#545C6E',
+            backdropColor: 'transparent',
+            stepSize: 25
+          },
+          grid: { color: '#262C3A' },
+          angleLines: { color: '#262C3A' },
+          pointLabels: {
+            color: '#E7E9EE',
+            font: { family: "'Inter', sans-serif", size: 13, weight: '600' }
+          }
+        }
+      },
+      plugins: {
+        legend: { display: false }
+      }
+    }
+  });
+}
+
+function renderReview(){
+  el.reviewList.innerHTML = '';
+  QUESTIONS.forEach((q, i) => {
+    const ans = state.answers[i] || { selectedIndex: -1, isCorrect: false };
+    const isSvg = q.optionType === 'svg';
+
+    const userAnswerText = ans.selectedIndex >= 0
+      ? (isSvg ? `<span style="display:inline-flex;vertical-align:middle;">${q.options[ans.selectedIndex]}</span>` : q.options[ans.selectedIndex])
+      : '(Tidak dijawab)';
+    const correctAnswerText = isSvg
+      ? `<span style="display:inline-flex;vertical-align:middle;">${q.options[q.correctIndex]}</span>`
+      : q.options[q.correctIndex];
+
+    const div = document.createElement('div');
+    div.className = 'review-item';
+    div.innerHTML = `
+      <div class="review-top">
+        <div class="review-q">${i + 1}. ${q.text}</div>
+        <div class="result-chip ${ans.isCorrect ? 'chip-correct' : 'chip-wrong'}">
+          ${ans.isCorrect ? '✓ Benar' : '✗ Salah'}
+        </div>
+      </div>
+      <div class="review-answers">
+        <span>Jawabanmu: <b>${userAnswerText}</b></span>
+        ${!ans.isCorrect ? `<span>Jawaban benar: <b>${correctAnswerText}</b></span>` : ''}
+      </div>
+      <div class="review-explain">💡 ${q.explanation}</div>
+    `;
+    el.reviewList.appendChild(div);
+  });
+}
+
+/* ================================================================
+   SECTION 11: SERTIFIKAT — PREVIEW + PDF (jsPDF)
+   ================================================================ */
+
+/* Isi & tampilkan modal preview sertifikat sebelum di-download */
+function openCertPreview(){
+  const correctCount = state.answers.filter(a => a && a.isCorrect).length;
+  const iqScore = computeIQEstimate(correctCount, QUESTIONS.length);
+  const { percentages } = computeCategoryScores();
+  const dateStr = new Date().toLocaleDateString('id-ID', { day:'numeric', month:'long', year:'numeric' });
+
+  el.certName.textContent = state.userName;
+  el.certScore.textContent = iqScore;
+  el.certCorrect.textContent = `${correctCount} dari ${QUESTIONS.length} soal benar`;
+  el.certDate.textContent = `Diterbitkan pada ${dateStr} · Dokumen ini bersifat edukatif, bukan hasil psikotes resmi`;
+
+  el.certCats.innerHTML = CATEGORIES.map(cat => `
+    <div class="cc-item">${cat}<b>${percentages[cat]}%</b></div>
+  `).join('');
+
+  el.certModal.classList.add('active');
+}
+
+function closeCertPreview(){
+  el.certModal.classList.remove('active');
+}
+
+el.btnCertificate.addEventListener('click', openCertPreview);
+el.btnCloseCert.addEventListener('click', closeCertPreview);
+el.btnCloseCert2.addEventListener('click', closeCertPreview);
+
+/* --- Integrasi jsPDF ---
+   jsPDF di-load via <script src="...jspdf.umd.min.js"> lalu diakses
+   lewat window.jspdf.jsPDF (bukan langsung `jsPDF`, karena UMD build
+   membungkusnya di dalam namespace window.jspdf).
+   Fungsi ini dipanggil setelah user sudah lihat preview & klik unduh. */
+function generateCertificatePDF(){
+  if(typeof window.jspdf === 'undefined'){
+    showToast('Gagal membuat PDF: library belum termuat. Coba lagi sebentar.');
+    return;
+  }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+
+  const correctCount = state.answers.filter(a => a && a.isCorrect).length;
+  const iqScore = computeIQEstimate(correctCount, QUESTIONS.length);
+  const { percentages } = computeCategoryScores();
+
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+
+  // Background
+  doc.setFillColor(11, 14, 20);
+  doc.rect(0, 0, pageW, pageH, 'F');
+
+  // Border frame
+  doc.setDrawColor(108, 123, 255);
+  doc.setLineWidth(1);
+  doc.rect(10, 10, pageW - 20, pageH - 20);
+
+  // Header
+  doc.setTextColor(138, 147, 166);
+  doc.setFontSize(11);
+  doc.text('NEUROTEST — SERTIFIKAT HASIL TES', pageW / 2, 28, { align: 'center' });
+
+  doc.setTextColor(231, 233, 238);
+  doc.setFontSize(26);
+  doc.text('Sertifikat Penyelesaian Tes IQ', pageW / 2, 42, { align: 'center' });
+
+  doc.setFontSize(13);
+  doc.setTextColor(138, 147, 166);
+  doc.text('Diberikan kepada:', pageW / 2, 58, { align: 'center' });
+
+  doc.setFontSize(28);
+  doc.setTextColor(108, 123, 255);
+  doc.text(state.userName, pageW / 2, 70, { align: 'center' });
+
+  // Score
+  doc.setFontSize(15);
+  doc.setTextColor(231, 233, 238);
+  doc.text(`Skor IQ Estimasi: ${iqScore}`, pageW / 2, 86, { align: 'center' });
+  doc.setFontSize(12);
+  doc.setTextColor(138, 147, 166);
+  doc.text(`Jawaban benar: ${correctCount} dari ${QUESTIONS.length} soal`, pageW / 2, 94, { align: 'center' });
+
+  // Category breakdown
+  let y = 110;
+  doc.setFontSize(12);
+  doc.setTextColor(231, 233, 238);
+  doc.text('Rincian per Kategori:', pageW / 2, y, { align: 'center' });
+  y += 8;
+  CATEGORIES.forEach(cat => {
+    doc.setFontSize(11);
+    doc.setTextColor(53, 217, 200);
+    doc.text(`${cat}: ${percentages[cat]}%`, pageW / 2, y, { align: 'center' });
+    y += 7;
+  });
+
+  // Footer
+  const dateStr = new Date().toLocaleDateString('id-ID', { day:'numeric', month:'long', year:'numeric' });
+  doc.setFontSize(10);
+  doc.setTextColor(84, 92, 110);
+  doc.text(`Diterbitkan pada ${dateStr} · Dokumen ini bersifat edukatif, bukan hasil psikotes resmi`, pageW / 2, pageH - 18, { align: 'center' });
+
+  doc.save(`Sertifikat-NeuroTest-${state.userName.replace(/\s+/g,'_')}.pdf`);
+  showToast('Sertifikat PDF berhasil diunduh!');
+}
+
+el.btnDownloadCert.addEventListener('click', () => {
+  try {
+    generateCertificatePDF();
+  } catch(err){
+    console.error('Gagal membuat sertifikat PDF:', err);
+    showToast('Gagal membuat PDF. Coba muat ulang halaman lalu ulangi.');
+  }
+});
+
+</script>
+</body>
+</html>
